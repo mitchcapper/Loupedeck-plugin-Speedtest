@@ -1,14 +1,8 @@
 namespace Loupedeck.SpeedtestPlugin.Commands
 {
     using System;
-    using System.Linq;
     using System.Text;
     using System.Threading.Tasks;
-
-    using Classes;
-
-    using Extensions;
-
 
     public class SpeedtestCommand : PluginDynamicCommand
     {
@@ -16,39 +10,47 @@ namespace Loupedeck.SpeedtestPlugin.Commands
         private Double _uploadSpeed = -1;
         private Int64 _ping = -1;
         private Boolean _isRunning;
-        private readonly SpeedtestClient _client;
+        private readonly SpeedManager _client;
+        private readonly SpeedTestDotNetService speedService;
 
-        public SpeedtestCommand() : base("Speedtest", "Run a speedtest", "Speedtest") =>
-            this._client = new SpeedtestClient();
+        public SpeedtestCommand() : base("Speedtest", "Run a speedtest", "Speedtest")
+        {
+            this._client = new SpeedManager();
+            this.speedService = new SpeedTestDotNetService();
+        }
 
-        protected override void RunCommand(String actionParameter)
+        protected override async void RunCommand(String actionParameter)
         {
             if (this._isRunning)
             {
                 return;
             }
-            
+
             // Run in another thread
-            Task.Run(() =>
+            await Task.Run(async () =>
             {
                 this.Reset();
 
                 this._isRunning = true;
 
                 // Test ping
-                this._ping = this._client.PingServer();
+                var (min_ping, max_ping) = await this._client.RefreshServerPings(this.speedService);
+                this._ping = (Int32)min_ping;
                 this.ActionImageChanged();
 
+                var bytes_sec = await this._client.DoRationalPreTestAndTest(this.speedService, false, true);
                 // Test download speed
-                this._downloadSpeed = this._client.TestDownloadSpeed();
+                this._downloadSpeed = bytes_sec;
                 this.ActionImageChanged();
 
                 // Test upload speed
-                this._uploadSpeed = this._client.TestUploadSpeed();
+                bytes_sec = await this._client.DoRationalPreTestAndTest(this.speedService, true, true);
+                this._uploadSpeed = bytes_sec;
                 this.ActionImageChanged();
 
-                this._isRunning = false;
+
             });
+            this._isRunning = false;
         }
 
         protected override BitmapImage GetCommandImage(String actionParameter, PluginImageSize imageSize)
@@ -62,8 +64,8 @@ namespace Loupedeck.SpeedtestPlugin.Commands
             }
 
             sb.AppendLine($"Ping: {this._ping} ms");
-            sb.AppendLine($"↓: {(this._downloadSpeed <= -1 ? "N/A" : $"{this._downloadSpeed.ToPrettySize()}/s")}");
-            sb.AppendLine($"↑: {(this._uploadSpeed <= -1 ? "N/A" : $"{this._uploadSpeed.ToPrettySize()}/s")}");
+            sb.AppendLine($"↓ {(this._downloadSpeed <= -1 ? "N/A" : $"{ByteSize.HumanReadable(this._downloadSpeed, 1)}/s")}");
+            sb.AppendLine($"↑ {(this._uploadSpeed <= -1 ? "N/A" : $"{ByteSize.HumanReadable(this._uploadSpeed, 1)}/s")}");
 
             bmpBuilder.DrawText(sb.ToString(), fontSize: 12);
             return bmpBuilder.ToImage();
