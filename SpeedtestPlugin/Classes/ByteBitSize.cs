@@ -1,8 +1,11 @@
 namespace Loupedeck.SpeedtestPlugin
 {
     using System;
+    using System.Collections.Generic;
+    using System.Text.RegularExpressions;
 
-    public class ByteSize : _IgnoreIgnoreIgnore.ByteBitSizeHelper<ByteSize.SizeUnit>
+
+    public class ByteSize : ByteBitSizeHelper<ByteSize.SizeUnit>
     {
         static ByteSize()
         {
@@ -22,7 +25,7 @@ namespace Loupedeck.SpeedtestPlugin
         public static Int64 SizeFromHumanReadable(String sizeStr, SizeUnit sizeType) => _SizeFromHumanReadable(sizeStr, sizeType);
         public static String HumanReadable(Double len, Int32 decimalPlaces = 2) => _HumanReadable(len, decimalPlaces);
     }
-    public class BitSize : _IgnoreIgnoreIgnore.ByteBitSizeHelper<BitSize.SizeUnit>
+    public class BitSize : ByteBitSizeHelper<BitSize.SizeUnit>
     {
         static BitSize()
         {
@@ -41,13 +44,6 @@ namespace Loupedeck.SpeedtestPlugin
         public static String HumanReadable(Double len, Int32 decimalPlaces = 2) => _HumanReadable(len, decimalPlaces);
         public enum SizeUnit { bit = 1, kbit = 2, mbit = 3, gbit = 4, tbit = 5 }
     }
-
-}
-namespace _IgnoreIgnoreIgnore
-{
-    using System;
-    using System.Collections.Generic;
-    using System.Text.RegularExpressions;
 
     public class ByteBitSizeHelper<SizeUnit> where SizeUnit : struct, Enum
     {
