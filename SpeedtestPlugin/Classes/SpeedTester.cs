@@ -8,29 +8,33 @@ namespace Loupedeck.SpeedtestPlugin
     using System.Net;
     using System.Net.Http;
     using System.Net.Http.Headers;
+    using System.Runtime.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
 
 
-    public interface IISpeedService
-    {
 
-        String GetSpeedUrl(SpeedManager.ServerResult server, Int64 BytesPerTest, Boolean isUpload, Guid TryGuid);
-        Task RefreshPossibleServers();
-        IEnumerable<SpeedManager.ServerResult> PossibleServers { get; }
-        Int64 GetServiceLikeableSize(Int32 megabytes);
-    }
     public class SpeedTester
     {
 
+        public class SpeedTesterException : Exception
+        {
+            public String url { get; set; }
+            public SpeedTesterException(String url) => this.url = url;
 
+            public SpeedTesterException(String url, String message) : base(message) => this.url = url;
+
+            public SpeedTesterException(String url, String message, Exception innerException) : base(message, innerException) => this.url = url;
+
+            protected SpeedTesterException(String url, SerializationInfo info, StreamingContext context) : base(info, context) => this.url = url;
+        }
 
         public static Int32 TransferBufferSize { get; set; } = (Int32)ByteSize.BytesFromMB(5);
 
         public async Task<Int64> GetSpeedBytesPerSec(IEnumerable<String> urls, Int32 maxSimultaneous = 5, Int32 timeout = 5000, Int64 ifUploadHowManyBytes = 0)
         {
             var startTime = DateTime.Now;
-
+            Classes.BasicLog.LogEvt($"Running a speed test maxSimultaneous: {maxSimultaneous} timeout: {timeout} ifUploadHowManyBytes: {ifUploadHowManyBytes} servers: {String.Join(", ", urls)}");
             var urlsLeft = new Stack<String>(urls);
             var cur_tasks = new List<Task<Double>>();
             var done_tasks = new List<Task<Double>>();
@@ -106,63 +110,68 @@ namespace Loupedeck.SpeedtestPlugin
         }
         private async Task<Double> DoRequestBytes(String url, Int32 timeout, Int64 ifUploadHowManyBytes = 0)
         {
-
-            var client = GetNewClient();
-
-            _ = this.GetType().Name;
-            var totalRead = 0L;
-            var buffer = GetBuffer();
-            var isMoreToRead = true;
-
-
-
-            var request = new HttpRequestMessage(ifUploadHowManyBytes != 0 ? HttpMethod.Post : HttpMethod.Get, url);
-            if (ifUploadHowManyBytes > 0)
+            try
             {
-                var fileContent = new FakeStreamContent(ifUploadHowManyBytes);
-                fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-                request.Content = fileContent;
-                totalRead += ifUploadHowManyBytes;
-            }
+                var client = GetNewClient();
 
-            using (var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
-            {
-                var cancellationTokenSource = new CancellationTokenSource();
-                cancellationTokenSource.CancelAfter(timeout);
-                var cancellationToken = cancellationTokenSource.Token;
+                _ = this.GetType().Name;
+                var totalRead = 0L;
+                var buffer = GetBuffer();
+                var isMoreToRead = true;
 
-                response.EnsureSuccessStatusCode();
 
-                if (ifUploadHowManyBytes == 0)
+
+                var request = new HttpRequestMessage(ifUploadHowManyBytes != 0 ? HttpMethod.Post : HttpMethod.Get, url);
+                if (ifUploadHowManyBytes > 0)
                 {
-                    using (var contentStream = await response.Content.ReadAsStreamAsync())
-                    {
-                        do
-                        {
-                            if (cancellationToken.IsCancellationRequested)
-                            {
-                                break;
-                            }
+                    var fileContent = new FakeStreamContent(ifUploadHowManyBytes);
+                    fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                    request.Content = fileContent;
+                    totalRead += ifUploadHowManyBytes;
+                }
 
-                            var read = await contentStream.ReadAsync(buffer, 0, buffer.Length);
-                            if (read == 0)
+                using (var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead))
+                {
+                    var cancellationTokenSource = new CancellationTokenSource();
+                    cancellationTokenSource.CancelAfter(timeout);
+                    var cancellationToken = cancellationTokenSource.Token;
+
+                    response.EnsureSuccessStatusCode();
+
+                    if (ifUploadHowManyBytes == 0)
+                    {
+                        using (var contentStream = await response.Content.ReadAsStreamAsync())
+                        {
+                            do
                             {
-                                isMoreToRead = false;
+                                if (cancellationToken.IsCancellationRequested)
+                                {
+                                    break;
+                                }
+
+                                var read = await contentStream.ReadAsync(buffer, 0, buffer.Length);
+                                if (read == 0)
+                                {
+                                    isMoreToRead = false;
+                                }
+                                else
+                                {
+                                    totalRead += read;
+                                }
                             }
-                            else
-                            {
-                                totalRead += read;
-                            }
+                            while (isMoreToRead);
                         }
-                        while (isMoreToRead);
                     }
                 }
+
+
+                return totalRead;
             }
-
-
-            return totalRead;
+            catch (Exception ex)
+            {
+                throw new SpeedTesterException(url, $"SpeedTester Url Test Failure for url {url}", ex);
+            }
         }
-
 
     }
 }

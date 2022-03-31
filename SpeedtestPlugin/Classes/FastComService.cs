@@ -25,7 +25,7 @@ namespace Loupedeck.SpeedtestPlugin
 
         public Int64 GetServiceLikeableSize(Int32 megabytes) => ByteSize.BytesFromMB(megabytes);
 
-        private readonly Int32 MaxServers = 5;
+        private readonly Int32 MaxServers = 10;
 
         private static String Token { get; set; }
 

@@ -67,6 +67,7 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Classes\BasicLog.cs" />
     <Compile Include="Classes\ByteBitSize.cs" />
     <Compile Include="Classes\FastComService.cs" />
     <Compile Include="Classes\SpeedManager.cs" />

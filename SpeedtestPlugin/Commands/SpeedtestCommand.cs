@@ -10,6 +10,7 @@ namespace Loupedeck.SpeedtestPlugin.Commands
         private Double _uploadSpeed = -1;
         private Int64 _ping = -1;
         private Boolean _isRunning;
+        private Boolean _failed;
         private readonly SpeedManager _client;
         private readonly SpeedTestDotNetService speedService;
 
@@ -30,24 +31,41 @@ namespace Loupedeck.SpeedtestPlugin.Commands
             await Task.Run(async () =>
             {
                 this.Reset();
-
+                this._failed = false;
                 this._isRunning = true;
+                this.ActionImageChanged();//Immediately inform user test is started to seem responsive
 
-                // Test ping
-                var (min_ping, max_ping) = await this._client.RefreshServerPings(this.speedService);
-                this._ping = (Int32)min_ping;
-                this.ActionImageChanged();
+                for (var x = 0; x < 2; x++)//try twice incase of an exception
+                {
+                    try
+                    {
+                        // Test ping
+                        var (min_ping, max_ping) = await this._client.RefreshServerPings(this.speedService);
+                        this._ping = (Int32)Math.Round(min_ping);
+                        this.ActionImageChanged();
 
-                var bytes_sec = await this._client.DoRationalPreTestAndTest(this.speedService, false, true);
-                // Test download speed
-                this._downloadSpeed = bytes_sec;
-                this.ActionImageChanged();
+                        var bytes_sec = await this._client.DoRationalPreTestAndTest(this.speedService, false, true);
+                        // Test download speed
+                        this._downloadSpeed = bytes_sec;
+                        this.ActionImageChanged();
 
-                // Test upload speed
-                bytes_sec = await this._client.DoRationalPreTestAndTest(this.speedService, true, true);
-                this._uploadSpeed = bytes_sec;
-                this.ActionImageChanged();
-
+                        // Test upload speed
+                        bytes_sec = await this._client.DoRationalPreTestAndTest(this.speedService, true, true);
+                        this._uploadSpeed = bytes_sec;
+                        this.ActionImageChanged();
+                        return;
+                    }
+                    catch (SpeedManager.SpeedTesterManagerServerException ex)
+                    {
+                        this._client.AddBadServer(ex.badServer, TimeSpan.FromMinutes(30));
+                        Classes.BasicLog.LogEvt(ex, $"Error doing speedtest on try: {x}");
+                        if (x == 1)
+                        {
+                            this._failed = true;
+                            this.ActionImageChanged();
+                        }
+                    }
+                }
 
             });
             this._isRunning = false;
@@ -57,6 +75,12 @@ namespace Loupedeck.SpeedtestPlugin.Commands
         {
             var sb = new StringBuilder();
             var bmpBuilder = new BitmapBuilder(imageSize);
+            if (!this._isRunning && this._failed)
+            {
+                bmpBuilder.DrawText("Test Failed\nTry Again");
+                return bmpBuilder.ToImage();
+            }
+
             if (this._ping <= -1)
             {
                 bmpBuilder.DrawText(this._isRunning ? "Speedtest started" : "Start speedtest");
