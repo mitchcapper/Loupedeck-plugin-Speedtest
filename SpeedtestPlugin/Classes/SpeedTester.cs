@@ -118,7 +118,7 @@ namespace Loupedeck.SpeedtestPlugin
                 var totalRead = 0L;
                 var buffer = GetBuffer();
                 var isMoreToRead = true;
-
+                Classes.BasicLog.LogEvt($"Starting a url test for url: {url} ifUploadHowManyBytes: {ifUploadHowManyBytes}");
 
 
                 var request = new HttpRequestMessage(ifUploadHowManyBytes != 0 ? HttpMethod.Post : HttpMethod.Get, url);
@@ -164,7 +164,7 @@ namespace Loupedeck.SpeedtestPlugin
                     }
                 }
 
-
+                Classes.BasicLog.LogEvt($"Done with a url test for url: {url} read: {totalRead}");
                 return totalRead;
             }
             catch (Exception ex)
