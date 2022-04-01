@@ -3,11 +3,14 @@ namespace Loupedeck.SpeedtestPlugin
 
     using System;
     using System.Collections.Generic;
+    using System.Diagnostics;
     using System.IO;
     using System.Linq;
     using System.Net;
     using System.Net.Http;
     using System.Net.Http.Headers;
+    using System.Net.NetworkInformation;
+    using System.Net.Sockets;
     using System.Runtime.Serialization;
     using System.Threading;
     using System.Threading.Tasks;
@@ -27,6 +30,69 @@ namespace Loupedeck.SpeedtestPlugin
             public SpeedTesterException(String url, String message, Exception innerException) : base(message, innerException) => this.url = url;
 
             protected SpeedTesterException(String url, SerializationInfo info, StreamingContext context) : base(info, context) => this.url = url;
+        }
+        public async Task<IEnumerable<Int64>> PingServer(String host_or_url, Int32 times = 4, Boolean tcpPingNotICMP = false)
+        {
+
+            if (host_or_url.StartsWith("http", StringComparison.OrdinalIgnoreCase) == false)
+            {
+                host_or_url = "https://" + host_or_url;
+            }
+
+            try
+            {
+                var uri = new Uri(host_or_url);
+                var ip = (await Dns.GetHostEntryAsync(uri.Host)).AddressList[0];
+
+                return tcpPingNotICMP ? await this.PingTCP(ip, uri.Port, times) : await this.PingICMP(ip, times);
+            }
+            catch (Exception ex)
+            {
+                throw new SpeedTesterException(host_or_url, $"PingTest failure for: {host_or_url}", ex);
+            }
+        }
+
+        private async Task<IEnumerable<Int64>> PingTCP(IPAddress ip, Int32 port, Int32 times)
+        {
+            var ret = new Int64[times];
+
+            for (var x = 0; x < times; x++)
+            {
+                var sock = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp) { Blocking = true };
+                sock.Blocking = true;
+
+                var stopwatch = new Stopwatch();
+                stopwatch.Start();
+
+                await sock.ConnectAsync(ip, port);
+                stopwatch.Stop();
+
+                ret[x] = (Int32)Math.Round(stopwatch.Elapsed.TotalMilliseconds);
+
+                sock.Close();
+                await Task.Delay(1000);
+            }
+
+            return ret;
+        }
+
+        private async Task<IEnumerable<Int64>> PingICMP(IPAddress ip, Int32 times)
+        {
+            var ping = new Ping();
+
+            var ret = new Int64[times];
+            for (var x = 0; x < times; x++)
+            {
+                var reply = await ping.SendPingAsync(ip);
+                if (reply.Status != IPStatus.Success)
+                {
+                    throw new PingException($"ICMP Ping of {ip} failed due to: {reply.Status}");
+                }
+
+                ret[x] = reply.RoundtripTime;
+                await Task.Delay(1000);
+            }
+            return ret;
         }
 
         public static Int32 TransferBufferSize { get; set; } = (Int32)ByteSize.BytesFromMB(5);

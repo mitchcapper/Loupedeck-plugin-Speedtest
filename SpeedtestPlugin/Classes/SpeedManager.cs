@@ -4,8 +4,6 @@ namespace Loupedeck.SpeedtestPlugin
     using System.Collections.Generic;
     using System.Diagnostics;
     using System.Linq;
-    using System.Net;
-    using System.Net.NetworkInformation;
     using System.Runtime.Serialization;
     using System.Threading.Tasks;
 
@@ -141,15 +139,12 @@ namespace Loupedeck.SpeedtestPlugin
 
             var posServers = this.NonBannedServers(service).ToList();
             posServers.ToList().ForEach(a => { a.pingChecks = 0; a.pingAvg = 0; });
-            times--;
-            await Task.WhenAll(posServers.Select(a => this.UpdateServerPing(a)));
-            while (times-- > 0)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(2));
-                await Task.WhenAll(posServers.Select(a => this.UpdateServerPing(a)));
-            }
+            await Task.WhenAll(posServers.Select(a => this.UpdateServerPing(a, times)));
+            posServers = this.NonBannedServers(service).ToList();
             var ret = (min: posServers.Min(a => a.pingAvg), max: posServers.Max(a => a.pingAvg));
             Classes.BasicLog.LogEvt(posServers, $"Ping test done time service: {service.GetType()}");
+
+
             return ret;
         }
         public async Task<Int64> DoRationalPreTestAndTest(IISpeedService service, Boolean doUpload, Boolean noPingTestFirst = false, Boolean alwaysDoSmallerFinalTest = false)
@@ -184,28 +179,21 @@ namespace Loupedeck.SpeedtestPlugin
             }
             return res;
         }
-        public async Task UpdateServerPing(SpeedManager.ServerResult server)
+        public async Task UpdateServerPing(SpeedManager.ServerResult server, Int32 times)
         {
+            var tester = new SpeedTester();
             try
             {
-                var ping = new Ping();
+                var pings = await tester.PingServer(server.server, times, false);
+                var time = pings.Sum() + server.pingAvg * server.pingChecks;
+                server.pingChecks += times;
+                server.pingAvg = time / server.pingChecks;
+                await tester.PingServer(server.server, 1, true);//make sure we can tcp connect
 
-
-                var uri_parse = server.server;
-                if (uri_parse.StartsWith("http", StringComparison.OrdinalIgnoreCase) == false)
-                {
-                    uri_parse = "https://" + server.server;
-                }
-
-                var uri = new Uri(uri_parse);
-                var ip = (await Dns.GetHostEntryAsync(uri.Host)).AddressList[0];
-                var reply = await ping.SendPingAsync(ip);
-                var time = reply.RoundtripTime + server.pingAvg * server.pingChecks;
-                server.pingAvg = time / ++server.pingChecks;
             }
-            catch (Exception ex)
+            catch (SpeedTester.SpeedTesterException ex)
             {
-                throw new SpeedTesterManagerServerException(server.server, $"Update Server Ping Exception for server: {server.server}", ex);
+                throw new SpeedTesterManagerServerException(server.server, $"SpeedTester TestService failure for {server.server}", ex);
             }
 
 
