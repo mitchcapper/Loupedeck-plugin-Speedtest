@@ -53,7 +53,7 @@ namespace Loupedeck.SpeedtestPlugin
             this.UnbanExpiredBadServers();
             lock (this.badServers)
             {
-                var ret = service.PossibleServers?.Where(a => this.badServers.Any(bs => bs.server == a.server) == false)?.ToArray();
+                var ret = service.PossibleServers?.Where(a => this.badServers.Any(bs => bs.server == a.server) == false && a.pingFailed==false)?.ToArray();
                 if (ret?.Length == 0)//if no possible servers we clear any bad servers that were on the list for that service then return null, this should cause the server list to be refreshed
                 {
                     var remove = service.PossibleServers?.Where(a => this.badServers.Any(bs => bs.server == a.server));
@@ -77,7 +77,7 @@ namespace Loupedeck.SpeedtestPlugin
             }
         }
 
-        public async Task<Int64> TestService(IISpeedService service, Boolean uploadTest, Int32 maxServers, Int32 maxTests, Int32 maxConcurrentTests, Int32 mbPerTest, Boolean no_ping_refresh = false)
+        public async Task<TestResult> TestService(IISpeedService service, Boolean uploadTest, Int32 maxServers, Int32 maxTests, Int32 maxConcurrentTests, Int32 mbPerTest, Boolean no_ping_refresh = false, Boolean throwOnServerException=false)
         {
             this.UnbanExpiredBadServers();
             if ((this.NonBannedServers(service)?.Count() > 0) == false)//if there are no unbanned servers or no servers at all lets refresh
@@ -85,10 +85,12 @@ namespace Loupedeck.SpeedtestPlugin
 
                 await service.RefreshPossibleServers();
             }
-
+            var retExceptions = new List<Exception>();
+            var ret = new TestResult();
             if (!no_ping_refresh)
             {
-                await this.RefreshServerPings(service);
+                ret = await this.RefreshServerPings(service);
+                this.HandleResultAddExceptionsToList(retExceptions, ret, throwOnServerException);
             }
 
             var bytes = service.GetServiceLikeableSize(mbPerTest);
@@ -96,31 +98,38 @@ namespace Loupedeck.SpeedtestPlugin
             var tester = new SpeedTester();
             try
             {
-                var res = await tester.GetSpeedBytesPerSec(urls.Select(a => a.url).ToArray(), maxConcurrentTests, ifUploadHowManyBytes: uploadTest ? bytes : 0);
-                return res;
+                ret.bytesPerSecond = await tester.GetSpeedBytesPerSec(urls.Select(a => a.url).ToArray(), maxConcurrentTests, ifUploadHowManyBytes: uploadTest ? bytes : 0);
+                return ret;
             }
             catch (AggregateException aex)
             {
+                if (throwOnServerException)
+                {
+                    throw aex;
+                }
+
                 foreach (var itm in aex.InnerExceptions)
                 {
-                    if (itm is SpeedTester.SpeedTesterException ex)
+                    if (itm is SpeedTester.SpeedTesterException ste)
                     {
-                        throw this.HandleException(ex, urls);
+                        retExceptions.Add(this.HandleException(ste, urls));
+                    }else
+                    {
+                        throw itm;
                     }
-                    throw itm;
                 }
-                throw new ApplicationException();//should never get here....
+                
             }
             catch (SpeedTester.SpeedTesterException ex)
             {
-                throw this.HandleException(ex, urls);
+                retExceptions.Add( this.HandleException(ex, urls));
             }
             finally
             {
                 GC.Collect();
             }
-
-
+            ret.serverErrors = retExceptions.Where(e=> e != null).Count() > 0 ? new AggregateException(retExceptions.Where(e => e != null))  : null;
+            return ret;
         }
 
         private SpeedTesterManagerServerException HandleException(SpeedTester.SpeedTesterException ex, IEnumerable<ServerUrl> urls)
@@ -129,7 +138,7 @@ namespace Loupedeck.SpeedtestPlugin
             return new SpeedTesterManagerServerException(host?.server, $"SpeedTester TestService failure for {host?.server}", ex);
         }
 
-        public async Task<(Double min_ping, Double max_ping)> RefreshServerPings(IISpeedService service, Int32 times = 2)
+        public async Task<TestResult> RefreshServerPings(IISpeedService service, Int32 times = 2)
         {
             this.UnbanExpiredBadServers();
             if (service.PossibleServers == null)
@@ -138,16 +147,43 @@ namespace Loupedeck.SpeedtestPlugin
             }
 
             var posServers = this.NonBannedServers(service).ToList();
-            posServers.ToList().ForEach(a => { a.pingChecks = 0; a.pingAvg = 0; });
-            await Task.WhenAll(posServers.Select(a => this.UpdateServerPing(a, times)));
+            var origCnt = posServers.Count;
+            posServers.ForEach(a => { a.pingChecks = 0; a.pingAvg = 0; });
+            var exceptions = await Task.WhenAll(posServers.Select(a => this.UpdateServerPing(a, times)));
+            var ignoredServers = exceptions.Where(a => a != null).Select(a => a.badServer);
             posServers = this.NonBannedServers(service).ToList();
+            if (posServers.Count == 0)
+            {
+                throw new SpeedTesterManagerServerException(null,$"There are no good servers left after the ping test, started with {origCnt}");
+            }
+
             var ret = (min: posServers.Min(a => a.pingAvg), max: posServers.Max(a => a.pingAvg));
             Classes.BasicLog.LogEvt(posServers, $"Ping test done time service: {service.GetType()}");
 
 
-            return ret;
+            return new TestResult {maxPing=ret.max,minPing=ret.min,serverErrors= exceptions.Where(e => e != null).Count() > 0 ? new AggregateException(exceptions.Where(e => e != null)) : null };
         }
-        public async Task<Int64> DoRationalPreTestAndTest(IISpeedService service, Boolean doUpload, Boolean noPingTestFirst = false, Boolean alwaysDoSmallerFinalTest = false)
+        public class TestResult
+        {
+            public Int64 bytesPerSecond;
+            public AggregateException serverErrors;
+            public Double minPing;
+            public Double maxPing;
+        }
+        protected void HandleResultAddExceptionsToList(List<Exception> exceptions, TestResult result, Boolean throwOnServerException = false)
+        {
+            var notNullExceptions = result?.serverErrors?.InnerExceptions?.Where(e => e != null).ToArray();
+            if (notNullExceptions?.Length > 0 == false)
+            {
+                return;
+            }
+            if (throwOnServerException)
+            {
+                throw result.serverErrors;
+            }
+            exceptions.AddRange(notNullExceptions);
+        }
+        public async Task<TestResult> DoRationalPreTestAndTest(IISpeedService service, Boolean doUpload, Boolean noPingTestFirst = false, Boolean alwaysDoSmallerFinalTest = false, Boolean throwOnServerException=false)
         {
             //first we do a small test only 6 mb total transferred, if that completes in medium time then we will do a 50 mb final test, if that is fast we can do our 250mb test
             var stopwatch = new Stopwatch();
@@ -156,13 +192,16 @@ namespace Loupedeck.SpeedtestPlugin
             var superSlowSeconds = 10; //4.8 megabits a second
             var mediumSeconds = 5; //9.6 megabits a second
             var do_big_final = !alwaysDoSmallerFinalTest;
+            var retExceptions = new List<Exception>();
             if (!noPingTestFirst)
             {
-                await this.RefreshServerPings(service);
+                var pres = await this.RefreshServerPings(service);
+                this.HandleResultAddExceptionsToList(retExceptions, pres, throwOnServerException);
             }
 
             stopwatch.Start();
             var res = await this.TestService(service, doUpload, 2, 3, 5, 2, no_ping_refresh: true);
+            this.HandleResultAddExceptionsToList(retExceptions, res, throwOnServerException);
             stopwatch.Stop();
             if (stopwatch.Elapsed.TotalSeconds > mediumSeconds)
             {
@@ -176,15 +215,22 @@ namespace Loupedeck.SpeedtestPlugin
             if (stopwatch.Elapsed.TotalSeconds <= superSlowSeconds)
             {
                 res = await this.TestService(service, doUpload, 3, finalMaxTests, finalMaxConcurrent, finalMBPerTest, no_ping_refresh: true);
+                this.HandleResultAddExceptionsToList(retExceptions, res, throwOnServerException);
+            }
+            if (retExceptions.Count > 0)
+            {
+                res.serverErrors = new AggregateException(retExceptions);
             }
             return res;
         }
-        public async Task UpdateServerPing(SpeedManager.ServerResult server, Int32 times)
+        public async Task<SpeedTesterManagerServerException> UpdateServerPing(SpeedManager.ServerResult server, Int32 times)
         {
             var tester = new SpeedTester();
             try
             {
-                var pings = await tester.PingServer(server.server, times, false);
+                server.pingFailed = false;
+                var host = server.server;
+                var pings = await tester.PingServer(host, times, false);
                 var time = pings.Sum() + server.pingAvg * server.pingChecks;
                 server.pingChecks += times;
                 server.pingAvg = time / server.pingChecks;
@@ -193,9 +239,11 @@ namespace Loupedeck.SpeedtestPlugin
             }
             catch (SpeedTester.SpeedTesterException ex)
             {
-                throw new SpeedTesterManagerServerException(server.server, $"SpeedTester TestService failure for {server.server}", ex);
+                server.pingFailed = true;
+                Classes.BasicLog.LogEvt(ex, $"Ping failure on: {server.server}");
+                return new SpeedTesterManagerServerException(server.server, $"SpeedTester TestService failure for {server.server}", ex);
             }
-
+            return null;
 
         }
         public IEnumerable<ServerUrl> GetSpeedUrls(IISpeedService service, IEnumerable<ServerResult> servers, Int32 maxDiffServers, Int32 TotalTests, Int64 BytesPerTest, Boolean isUpload)
@@ -223,6 +271,7 @@ namespace Loupedeck.SpeedtestPlugin
             public String server;
             public Int32 pingChecks;
             public Double pingAvg;
+            public Boolean pingFailed;//if failed will not use until next successful ping
         }
 
     }

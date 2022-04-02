@@ -12,7 +12,7 @@
 
     internal static class BasicLog
     {
-        public static Boolean DebugLogging = false;
+        public static Boolean DebugLogging = true;
         private class TraceLogObj
         {
 
@@ -30,7 +30,7 @@
             public override String ToString()
             {
                 //var shortPath = ApiLogger.GetFileNameFromFullPath(source_file_path);
-                var msg = $"{this.stamp:mm:ss.ff} {this.source_file_path}::{this.member_name}: {this.message}";
+                var msg = $"{this.stamp:mm:ss.ff} {this.source_file_path}:{this.source_line_number}::{this.member_name}: {this.message}";
                 if (this.obj != null)
                 {
                     String serialized;

@@ -31,24 +31,42 @@ namespace Loupedeck.SpeedtestPlugin
 
             protected SpeedTesterException(String url, SerializationInfo info, StreamingContext context) : base(info, context) => this.url = url;
         }
-        public async Task<IEnumerable<Int64>> PingServer(String host_or_url, Int32 times = 4, Boolean tcpPingNotICMP = false)
+        public Task<IEnumerable<Int64>> PingServer(String host_or_url, Int32 times = 4, Boolean tcpPingNotICMP = false)
         {
+            var tsc = new TaskCompletionSource<IEnumerable<Int64>>();
 
             if (host_or_url.StartsWith("http", StringComparison.OrdinalIgnoreCase) == false)
             {
                 host_or_url = "https://" + host_or_url;
             }
+            this.BackgroundPingServer(tsc, host_or_url, times, tcpPingNotICMP);
+            return tsc.Task;
+         
+        }
 
+        private async void BackgroundPingServer(TaskCompletionSource<IEnumerable<Int64>> tsc, String host_or_url, Int32 times, Boolean tcpPingNotICMP)
+        {
             try
             {
                 var uri = new Uri(host_or_url);
                 var ip = (await Dns.GetHostEntryAsync(uri.Host)).AddressList[0];
 
-                return tcpPingNotICMP ? await this.PingTCP(ip, uri.Port, times) : await this.PingICMP(ip, times);
+                var mainTsk = tcpPingNotICMP ? this.PingTCP(ip, uri.Port, times) : this.PingICMP(ip, times);
+                var maxWait = TimeSpan.FromSeconds(Math.Max(1.1 * times, 4));//give at least 4 seconds
+                await Task.WhenAny(mainTsk, Task.Delay(maxWait));//allow 1.1 seconds times the number of tests max if your ping is worse sorry don't want to hang too long.
+                if (mainTsk.Status == TaskStatus.RanToCompletion)
+                {
+                    tsc.SetResult(mainTsk.Result);
+                }
+                else
+                {
+                    tsc.SetException(new SpeedTesterException($"Ping test for {host_or_url} {times} times failed to complete before timeout of: {maxWait}"));
+                }
+                await mainTsk;//go back to awaiting so we can handle any exceptions, no longer delaying test process.
             }
             catch (Exception ex)
             {
-                throw new SpeedTesterException(host_or_url, $"PingTest failure for: {host_or_url}", ex);
+                tsc.TrySetException(new SpeedTesterException(host_or_url, $"PingTest failure for: {host_or_url}", ex));
             }
         }
 

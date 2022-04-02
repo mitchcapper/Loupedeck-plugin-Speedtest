@@ -19,7 +19,30 @@ namespace Loupedeck.SpeedtestPlugin.Commands
             this._client = new SpeedManager();
             this.speedService = new SpeedTestDotNetService();
         }
+        private readonly TimeSpan badServerTimeout = TimeSpan.FromMinutes(30);
+        private void HandleResultExceptions(AggregateException serverErrors, String whatTest)
+        {
+            if (serverErrors?.InnerExceptions?.Count > 0)
+            {
+                foreach (var exception in serverErrors.InnerExceptions)
+                {
+                    if (exception is SpeedManager.SpeedTesterManagerServerException ex)
+                    {
+                        Classes.BasicLog.LogEvt(exception, $"Banning server: {ex.badServer} as failed during {whatTest}");
+                        this._client.AddBadServer(ex.badServer, this.badServerTimeout);
+                    }
+                    else
+                    {
+                        Classes.BasicLog.LogEvt(exception, $"Should have only returned SpeedTestManager Exceptions not sure why this got returned");
+                        throw new ApplicationException($"Should not be getting here invalid exception type: {exception.GetType()} returned");
+                    }
+                    
+                }
 
+            }
+
+            
+        }
         protected override async void RunCommand(String actionParameter)
         {
             if (this._isRunning)
@@ -40,24 +63,31 @@ namespace Loupedeck.SpeedtestPlugin.Commands
                     try
                     {
                         // Test ping
-                        var (min_ping, max_ping) = await this._client.RefreshServerPings(this.speedService);
-                        this._ping = (Int32)Math.Round(min_ping);
+                        var ping_result = await this._client.RefreshServerPings(this.speedService);
+                        this.HandleResultExceptions(ping_result.serverErrors,"Ping Test");
+                        this._ping = (Int32)Math.Round(ping_result.minPing != 0 ? ping_result.minPing : -1);
                         this.ActionImageChanged();
 
-                        var bytes_sec = await this._client.DoRationalPreTestAndTest(this.speedService, false, true);
+                        var dl_result = await this._client.DoRationalPreTestAndTest(this.speedService, false, true);
+                        this.HandleResultExceptions(dl_result.serverErrors, "Download Test");
                         // Test download speed
-                        this._downloadSpeed = bytes_sec;
+                        this._downloadSpeed = dl_result.bytesPerSecond;
                         this.ActionImageChanged();
 
                         // Test upload speed
-                        bytes_sec = await this._client.DoRationalPreTestAndTest(this.speedService, true, true);
-                        this._uploadSpeed = bytes_sec;
+                        var up_result = await this._client.DoRationalPreTestAndTest(this.speedService, true, true);
+                        this.HandleResultExceptions(up_result.serverErrors, "Upload Test");
+                        this._uploadSpeed = up_result.bytesPerSecond;
                         this.ActionImageChanged();
                         return;
                     }
+                    catch (AggregateException ae)
+                    {
+                        this.HandleResultExceptions(ae, "Global catch all");
+                    }
                     catch (SpeedManager.SpeedTesterManagerServerException ex)
                     {
-                        this._client.AddBadServer(ex.badServer, TimeSpan.FromMinutes(30));
+                        this._client.AddBadServer(ex.badServer, this.badServerTimeout);
                         Classes.BasicLog.LogEvt(ex, $"Error doing speedtest on try: {x}");
                         if (x == 1)
                         {
